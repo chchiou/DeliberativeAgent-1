@@ -37,11 +37,15 @@ public class DeliberativeTemplate implements DeliberativeBehavior {
 	/* the properties of the agent */
 	Agent agent;
 	int capacity;
-//	TaskSet carriedTasks;
+	TaskSet carriedTasks;
 	/* the planning class */
 	Algorithm algorithm;
-	HashMap<City, HashSet<Task>> pickupMap;
-	HashMap<City, HashSet<Task>> deliveryMap;
+	HashMap<City, HashSet<Task>> pickupMap = new HashMap<City, HashSet<Task>> ();
+	HashMap<City, HashSet<Task>> deliveryMap = new HashMap<City, HashSet<Task>> ();
+	
+	ArrayList<State> openList = new ArrayList<State>();
+	ArrayList<State> closeList = new ArrayList<State>();
+	
 	City InitialCity;
 	Vehicle vehicle;
 	
@@ -51,11 +55,12 @@ public class DeliberativeTemplate implements DeliberativeBehavior {
 		this.topology = topology;
 		this.td = td;
 		this.agent = agent;
+		this.carriedTasks = null;
 		this.cityNum = topology.cities().size();
 	
 		// initialize the planner
 		int capacity = agent.vehicles().get(0).capacity();
-		String algorithmName = agent.readProperty("algorithm", String.class, "BFS");
+		String algorithmName = agent.readProperty("algorithm", String.class, "ASTAR");
 		
 		// Throws IllegalArgumentException if algorithm is unknown
 		algorithm = Algorithm.valueOf(algorithmName.toUpperCase());
@@ -71,7 +76,7 @@ public class DeliberativeTemplate implements DeliberativeBehavior {
 		switch (algorithm) {
 		case ASTAR:
 			// ...
-			plan = naivePlan(vehicle, tasks);
+			plan = astarPlan(vehicle, tasks);
 			break;
 		case BFS:
 			// ...
@@ -83,7 +88,65 @@ public class DeliberativeTemplate implements DeliberativeBehavior {
 		return plan;
 	}
 	
-	private Plan naivePlan(Vehicle vehicle, TaskSet tasks) {
+	private Plan astarPlan(Vehicle vehicle, TaskSet tasks) {
+		
+		City current = vehicle.getCurrentCity();
+		Plan plan = new Plan(current);
+		this.InitialCity = current;
+		this.vehicle = vehicle;
+		State initalState = initiateState(vehicle, tasks, plan);
+		State optimalState = null;
+		double temp = 0;
+		int index = 0;
+		
+		openList.add(initalState);
+		
+		for(City city : topology.cities()) {
+			pickupMap.put(city, new HashSet<Task>());
+			deliveryMap.put(city, new HashSet<Task> ());
+		}
+		
+		for(Task task : tasks) {
+			pickupMap.get(task.pickupCity).add(task);
+			deliveryMap.get(task.deliveryCity).add(task);
+		}
+		
+		while(!openList.isEmpty()){
+			State state = openList.get(0);     // pick the first element of the open list
+			
+			openList.remove(0);	                       // remove the explored state from openList to closeList			   
+			closeList.add(state);		
+
+			if (state.deliveredTasks.size() == tasks.size()) {                            // current state is the goal state
+					optimalState = state;
+			} 
+			else {								// current state is not the goal state
+				index = 0;
+				for (State nextState: this.nextStates(state)) {              // explore the neighbors
+					
+					if (closeList.contains(nextState)){		// no need to explore state which has been in closeList
+                        continue;
+					}
+					if (index == 0){			// set the first next state as min cost
+						temp = nextState.cost + hrCost(nextState, tasks.size());
+						optimalState = nextState;
+						openList.add(nextState);
+					}
+					else{			
+						if ((nextState.cost + hrCost(nextState, tasks.size())) <= temp){
+							temp = nextState.cost + hrCost(nextState, tasks.size());
+							openList.remove(0);                                // remove the former optimal state from the openlist
+							optimalState = nextState;
+							openList.add(nextState);						   // add new optimal state into openlist
+						}
+					}
+					index++;
+				}
+			}			
+		}
+		System.out.println("Return Optimal");
+		System.out.println(optimalState.cost);
+		System.out.println(optimalState.plan);
 		return null;
 	}
 	
@@ -98,8 +161,6 @@ public class DeliberativeTemplate implements DeliberativeBehavior {
 		stateQueue.add(initalState);
 		State optimalState = null;
 		boolean firstHit = false;
-		this.pickupMap = new HashMap<City, HashSet<Task>> ();
-		this.deliveryMap = new HashMap<City, HashSet<Task>> ();
 		
 		for(City city : topology.cities()) {
 			pickupMap.put(city, new HashSet<Task>());
@@ -111,14 +172,10 @@ public class DeliberativeTemplate implements DeliberativeBehavior {
 			deliveryMap.get(task.deliveryCity).add(task);
 		}
 		
-		for(Task task : vehicle.getCurrentTasks()) {
-			deliveryMap.get(task.deliveryCity).add(task);
-		}
-		
 		while (!stateQueue.isEmpty()) {
 			State state = stateQueue.remove();
 			
-			if (state.deliveredTasks.size() == tasks.size() + vehicle.getCurrentTasks().size()) {
+			if (state.deliveredTasks.size() == tasks.size()) {
 				if (!firstHit) {
 					optimalState = state;
 					firstHit = true;
@@ -127,7 +184,7 @@ public class DeliberativeTemplate implements DeliberativeBehavior {
 				}
 			} else {
 				for (State nextState: this.nextStates(state)) {
-					if (!firstHit  || state.cost < optimalState.cost) {
+					if (!firstHit  || nextState.cost < optimalState.cost) {         // state.cost   or nextState.cost
 //						if (!hasCircle(nextState)) {
 							stateQueue.add(nextState);
 //						}
@@ -164,8 +221,8 @@ public class DeliberativeTemplate implements DeliberativeBehavior {
 		state.currentCity = vehicle.getCurrentCity();
 		state.capacity = vehicle.capacity();
 		state.cost = 0;
-		if(vehicle.getCurrentTasks() != null) {
-			for(Task task : vehicle.getCurrentTasks()) {
+		if(this.carriedTasks != null) {
+			for(Task task : this.carriedTasks) {
 				state.carriedTasks.add(task.id);
 			}
 		}
@@ -248,6 +305,13 @@ public class DeliberativeTemplate implements DeliberativeBehavior {
 		return returnState;
 	}
 	
+	public double hrCost(State state, int totalTask){    // heuristic function of cost from current state to goal state
+		double cost = 0;
+		
+		cost = (totalTask - state.deliveredTasks.size()) * 2000000;
+				
+		return cost;
+	}
 	
 	State copyState(State state) {
 		
@@ -282,6 +346,7 @@ public class DeliberativeTemplate implements DeliberativeBehavior {
 	@Override
 	public void planCancelled(TaskSet carriedTasks) {
 		if (!carriedTasks.isEmpty()) {
+			this.carriedTasks = carriedTasks;
 			// This cannot happen for this simple agent, but typically
 			// you will need to consider the carriedTasks when the next
 			// plan is computed.
